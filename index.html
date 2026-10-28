@@ -343,12 +343,13 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
     ui.tab = "play"; ui.lastResult = null; ui.scrollCur = true; ui.flash = "";
     save(); render();
   }
-  function finishGame(g) {
+  function finishGame(g, aborted) {
     var tot = totals(g), m = Math.max.apply(null, tot);
     var rec = {
       id: g.id, date: new Date().toISOString(), players: g.players.slice(), totals: tot,
       winners: g.players.filter(function (_, i) { return tot[i] === m; }),
-      rounds: g.rounds.map(function (r) {
+      aborted: !!aborted, totalRounds: g.rounds.length,
+      rounds: g.rounds.filter(function (r) { return r.done; }).map(function (r) {
         return {
           bids: g.players.map(function (_, p) { return bidOf(r, p); }),
           tricks: r.tricks.slice(),
@@ -414,6 +415,14 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
           ui.flash = "Partie gespeichert. Du findest sie unter „Gespeicherte Partien“."; ui.tab = "play"; ui.scrollTop = true;
           save(); render();
         }
+        break;
+      case "doabort":
+        var ag = S.active; if (!ag) break;
+        var dn = ag.rounds.filter(function (x) { return x.done; }).length;
+        ui.confirm = null; ui.sheet = null; ui.tab = "play"; ui.flash = "";
+        if (dn === 0) { S.active = null; ui.flash = "Partie ohne Wertung verworfen."; }
+        else finishGame(ag, true);
+        save(); render();
         break;
       case "resume":
         var sg = S.saved.filter(function (x) { return x.id === d.id; })[0];
@@ -505,7 +514,7 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
     var rec = S.history.filter(function (x) { return x.id === ui.lastResult; })[0];
     if (!rec) { ui.lastResult = null; return setupView(); }
     var rk = ranking(rec.players, rec.totals);
-    var h = '<div class="hero"><div class="big crown">👑</div><h2>' + esc(rec.winners.join(" & ")) + '</h2><p>' + (rec.winners.length > 1 ? "teilen sich den Sieg." : "gewinnt die Partie.") + "</p></div>";
+    var h = '<div class="hero"><div class="big crown">👑</div><h2>' + esc(rec.winners.join(" & ")) + '</h2><p>' + (rec.aborted ? (rec.winners.length > 1 ? "führen" : "führt") + " beim Abbruch nach " + rec.rounds.length + " von " + rec.totalRounds + " Runden." : rec.winners.length > 1 ? "teilen sich den Sieg." : "gewinnt die Partie.") + "</p></div>";
     h += '<ol class="podium">';
     rk.forEach(function (x) { var win = rec.winners.indexOf(rec.players[x.p]) >= 0; h += '<li class="' + (win ? "win" : "") + '"><span class="pos">' + x.rank + '.</span><span>' + esc(rec.players[x.p]) + (win ? ' <span class="crown">👑</span>' : "") + '</span><span class="pts">' + rec.totals[x.p] + "</span></li>"; });
     h += '</ol><p class="note" style="text-align:center">Die Partie ist im Verlauf gespeichert.</p>';
@@ -515,7 +524,16 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
 
   function gameView(g) {
     var n = g.players.length, T = g.rounds.length, tot = totals(g), lead = leaders(tot, g.cur);
-    var h = '<div class="gtop"><div class="rd">Runde ' + (g.cur + 1) + "/" + T + '</div><button class="btn small ghost" data-act="pause">Spiel speichern</button></div>';
+    var h = '<div class="gtop"><div class="rd">Runde ' + (g.cur + 1) + "/" + T + '</div><div style="display:flex;gap:8px"><button class="btn small ghost" data-act="pause" aria-label="Spiel speichern">Speichern</button><button class="btn small ghost" data-act="ask" data-k="abort" aria-label="Spiel abbrechen">Abbrechen</button></div></div>';
+    if (ui.confirm === "abort") {
+      var doneN = g.rounds.filter(function (r) { return r.done; }).length;
+      var ln = lead.map(function (p) { return g.players[p]; }).join(" & ");
+      h += '<div class="alert" role="alert" style="margin-bottom:10px;background:rgba(74,53,146,.3);border-color:#8b6be0;color:#e8e0ff">' +
+        (doneN === 0
+          ? "Es ist noch keine Runde abgeschlossen. Die Partie wird ohne Wertung verworfen."
+          : "<b>Spiel abbrechen?</b> " + esc(ln) + (lead.length > 1 ? " führen" : " führt") + " nach " + doneN + " von " + T + " Runden und " + (lead.length > 1 ? "werden" : "wird") + " als Sieger gewertet. Die Partie kommt mit allen abgeschlossenen Runden in die Statistik. Die laufende Runde zählt nicht.") +
+        '<div class="row-btns"><button class="btn small" data-act="doabort">Ja, abbrechen</button><button class="btn small ghost" data-act="no">Weiterspielen</button></div></div>';
+    }
     h += '<div class="parch' + (n > 4 ? " dense" : "") + '" style="--n:' + n + '"><div class="grid hd"><div class="hn rc">Stiche</div>';
     g.players.forEach(function (nm, p) { h += '<div class="hn">' + esc(nm) + "<small>" + (lead.indexOf(p) >= 0 ? '<span class="crown">👑</span>' : "") + "</small></div>"; });
     h += "</div>";
@@ -593,7 +611,7 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
     var h = '<h2 class="page-h">Verlauf</h2>';
     S.history.forEach(function (rec) {
       var rk = ranking(rec.players, rec.totals), open = ui.expanded[rec.id];
-      h += '<div class="card hgame"><div class="hd"><span class="dt">' + esc(fmtDate(rec.date)) + '</span><span class="meta">' + rec.players.length + " Spieler · " + rec.rounds.length + " Runden</span></div>";
+      h += '<div class="card hgame"><div class="hd"><span class="dt">' + esc(fmtDate(rec.date)) + '</span><span class="meta">' + rec.players.length + " Spieler · " + (rec.aborted ? "abgebrochen nach " + rec.rounds.length + "/" + rec.totalRounds : rec.rounds.length) + " Runden</span></div>";
       h += '<ol class="podium">';
       rk.forEach(function (x) { var win = rec.winners.indexOf(rec.players[x.p]) >= 0; h += '<li class="' + (win ? "win" : "") + '"><span class="pos">' + x.rank + '.</span><span>' + esc(rec.players[x.p]) + (win ? ' <span class="crown">👑</span>' : "") + '</span><span class="pts">' + rec.totals[x.p] + "</span></li>"; });
       h += "</ol>";
@@ -648,7 +666,7 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
 
   function settingsView() {
     var h = '<h2 class="page-h">Einstellungen</h2>';
-    h += '<div class="card"><div class="lbl2" style="margin-top:0">Wertung</div><ul class="rules"><li>Richtige Ansage: 20 Punkte plus 10 Punkte pro Stich.</li><li>Falsche Ansage: minus 10 Punkte pro Stich Abweichung.</li><li>Die Ansagen aller Spieler dürfen zusammen nicht genau die Kartenzahl der Runde ergeben.</li><li>Wolke: ändert die Ansage der laufenden Runde um +1 oder -1. Die geänderte Ansage zählt.</li><li>Ansagen und Stiche lassen sich bis zum Rundenabschluss ändern.</li></ul></div>';
+    h += '<div class="card"><div class="lbl2" style="margin-top:0">Wertung</div><ul class="rules"><li>Richtige Ansage: 20 Punkte plus 10 Punkte pro Stich.</li><li>Falsche Ansage: minus 10 Punkte pro Stich Abweichung.</li><li>Die Ansagen aller Spieler dürfen zusammen nicht genau die Kartenzahl der Runde ergeben.</li><li>Wolke: ändert die Ansage der laufenden Runde um +1 oder -1. Die geänderte Ansage zählt.</li><li>Ansagen und Stiche lassen sich bis zum Rundenabschluss ändern.</li><li>Spiel abbrechen: Der aktuelle Führende gilt als Sieger. Die abgeschlossenen Runden zählen für die Statistik.</li></ul></div>';
     h += '<div class="card"><div class="lbl2" style="margin-top:0">Daten sichern</div><p class="note" style="margin-top:0">Die Daten liegen im Browser dieses Geräts. Kopiere die Sicherung, bevor du Browserdaten löschst oder das Gerät wechselst.</p><textarea id="bk" readonly aria-label="Sicherung">' + esc(backupText()) + '</textarea><div style="margin-top:8px"><button class="btn small" data-act="copy">Sicherung kopieren</button></div>';
     h += '<div class="lbl2">Wiederherstellen</div><textarea id="imp" placeholder="Sicherungstext hier einfügen" aria-label="Sicherung einfügen"></textarea><div style="margin-top:8px"><button class="btn small ghost" data-act="import">Einfügen und zusammenführen</button></div>';
     if (ui.msg) h += '<p class="note">' + esc(ui.msg) + "</p>";
