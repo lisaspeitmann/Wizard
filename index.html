@@ -183,6 +183,19 @@ button.bx { border: 1.5px dashed var(--gold-dark); background: rgba(255, 243, 20
 .cbtn { min-height: 40px; padding: 6px 12px; border: 1px solid rgba(154, 138, 230, 0.6); border-radius: 4px; background: rgba(74, 53, 146, 0.35); color: #d9d0ff; font-size: 15px; }
 .cbtn.on { background: var(--violet-2); border-color: #c6b9ff; color: #fff; }
 .cbtn:disabled { opacity: 0.35; }
+.chip:disabled { opacity: 0.3; }
+.bombrow { display: flex; align-items: center; gap: 12px; margin: 4px 0 2px; padding: 10px 12px; border: 1px solid rgba(154, 138, 230, 0.5); border-radius: 4px; background: rgba(74, 53, 146, 0.22); }
+.bombrow { flex-wrap: wrap; }
+.bombrow.on { border-color: var(--gold); background: rgba(217, 172, 74, 0.16); }
+.bombrow .bl { flex: 1 1 190px; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.yn { flex: none; display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--gold-dark); border-radius: 4px; overflow: hidden; }
+.yn button { min-width: 62px; min-height: 46px; padding: 0 14px; border: 0; background: transparent; font-family: var(--f-display); font-weight: 700; font-size: 15px; letter-spacing: 0.05em; color: var(--muted); }
+.yn button + button { border-left: 1px solid var(--gold-dark); }
+.yn button.on { background: #3a4a8a; color: #fff; }
+.yn button.on.yes { background: var(--gold); color: #2a1c05; }
+.bombrow b { font-family: var(--f-display); letter-spacing: 0.05em; color: var(--gold-soft); }
+.bombrow small { font-size: 14px; color: var(--muted); line-height: 1.3; }
+.rn .mk { display: flex; gap: 3px; line-height: 1; }
 .sfoot { position: sticky; bottom: calc(-14px - env(safe-area-inset-bottom, 0px)); padding: 12px 0 2px; margin-top: 4px; background: linear-gradient(180deg, transparent, #101a40 28%); display: flex; flex-direction: column; gap: 8px; }
 .stat { font-size: 15px; color: var(--muted); text-align: center; }
 .stat.ok { color: #8fd7a3; }
@@ -288,7 +301,7 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
   function uniq(a) { var seen = {}, out = []; a.forEach(function (x) { var k = x.toLowerCase(); if (!seen[k]) { seen[k] = 1; out.push(x); } }); return out; }
 
   /* ---------- Rules ---------- */
-  function newRound(n) { return { base: Array(n).fill(null), cloud: Array(n).fill(0), tricks: Array(n).fill(null), done: false }; }
+  function newRound(n) { return { base: Array(n).fill(null), cloud: Array(n).fill(0), tricks: Array(n).fill(null), bomb: false, done: false }; }
   function bidOf(r, p) { return r.base[p] == null ? null : r.base[p] + (r.cloud[p] || 0); }
   function scoreFor(b, t) { return b === t ? 20 + 10 * t : -10 * Math.abs(b - t); }
   function scoreOf(r, p) { var b = bidOf(r, p), t = r.tricks[p]; return (b == null || t == null) ? null : scoreFor(b, t); }
@@ -315,15 +328,19 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
     var sum = r.tricks.reduce(function (a, t) { return a + (t == null ? 0 : t); }, 0);
     var bidSum = 0;
     r.base.forEach(function (b, p) { if (b != null) bidSum += bidOf(r, p); });
-    var conflict = !bidsMissing && bidSum === N;
-    var ok = !bidsMissing && !trMissing && !conflict && sum === N;
+    var bomb = r.bomb ? 1 : 0;
+    var cloudUsed = r.cloud.some(function (c) { return c !== 0; });
+    var total = sum + bomb;
+    var conflict = !bidsMissing && bidSum === N && !cloudUsed;
+    var cloudOK = !bidsMissing && bidSum === N && cloudUsed;
+    var ok = !bidsMissing && !trMissing && !conflict && total === N;
     var msg = "";
     if (conflict) msg = "Ansagen gehen auf.";
     else if (bidsMissing) msg = "Es fehlen noch Ansagen.";
+    else if (total > N) msg = "Zu viele Stiche eingetragen.";
     else if (trMissing) msg = "Es fehlen noch Stiche.";
-    else if (sum > N) msg = "Zu viele Stiche eingetragen.";
-    else if (sum < N) msg = "Es fehlen noch Stiche.";
-    return { ok: ok, sum: sum, N: N, msg: msg, bidSum: bidSum, conflict: conflict, bidsMissing: bidsMissing };
+    else if (total < N) msg = "Es fehlen noch Stiche.";
+    return { ok: ok, sum: sum, bomb: bomb, total: total, N: N, msg: msg, bidSum: bidSum, conflict: conflict, cloudOK: cloudOK, bidsMissing: bidsMissing };
   }
 
   /* ---------- Actions ---------- */
@@ -354,7 +371,8 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
           bids: g.players.map(function (_, p) { return bidOf(r, p); }),
           tricks: r.tricks.slice(),
           scores: g.players.map(function (_, p) { return scoreOf(r, p); }),
-          clouds: r.cloud.slice()
+          clouds: r.cloud.slice(),
+          bomb: !!r.bomb
         };
       })
     };
@@ -379,10 +397,18 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
   function toggleCloud(p, d) {
     var r = S.active.rounds[S.active.cur], N = S.active.cur + 1;
     if (r.base[p] == null) return;
+    if (r.cloud.some(function (c, q) { return q !== p && c !== 0; })) return;
     var nd = r.cloud[p] === d ? 0 : d;
     var b = r.base[p] + nd;
     if (b < 0 || b > N) return;
     r.cloud[p] = nd; save(); render();
+  }
+  function toggleBomb(on) {
+    var r = S.active.rounds[S.active.cur], N = S.active.cur + 1;
+    if (!!r.bomb === on) return;
+    r.bomb = on;
+    if (r.bomb) r.tricks = r.tricks.map(function (t) { return t != null && t > N - 1 ? null : t; });
+    save(); render();
   }
   function setTricks(p, v) { S.active.rounds[S.active.cur].tricks[p] = v; save(); render(); }
 
@@ -407,6 +433,7 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
       case "seg": ui.sheet.tab = d.v; render(); break;
       case "bid": setBid(+d.p, +d.v); break;
       case "cloud": toggleCloud(+d.p, +d.d); break;
+      case "bomb": toggleBomb(d.v === "1"); break;
       case "tr": setTricks(+d.p, +d.v); break;
       case "next": if (sheetStatus(S.active).conflict) break; ui.sheet.tab = "tr"; render(); break;
       case "pause":
@@ -539,7 +566,7 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
     h += "</div>";
     g.rounds.forEach(function (r, i) {
       var cls = i === g.cur ? "cur" : i < g.cur ? "done" : "fut";
-      h += '<div class="grid rw ' + cls + '"><div class="rn">' + (i + 1) + (i === g.cur ? '<i class="pen" title="Ansagen noch änderbar">✎</i>' : "") + "</div>";
+      h += '<div class="grid rw ' + cls + '"><div class="rn">' + (i + 1) + ((i === g.cur || r.bomb) ? '<span class="mk">' + (i === g.cur ? '<i class="pen" title="Ansagen noch änderbar">✎</i>' : "") + (r.bomb ? '<i class="pen" title="Bombe gespielt">💣</i>' : "") + "</span>" : "") + "</div>";
       g.players.forEach(function (nm, p) {
         var b = bidOf(r, p), t = r.tricks[p], cloud = r.cloud[p] ? '<i class="cl" title="Wolke">☁</i>' : "";
         if (i === g.cur) {
@@ -567,9 +594,13 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
   function sheetView(g) {
     var r = g.rounds[g.cur], N = g.cur + 1, st = sheetStatus(g), tab = ui.sheet.tab;
     var tot = totals(g), lead = leaders(tot, g.cur);
+    var cloudBy = -1; r.cloud.forEach(function (c, q) { if (c !== 0) cloudBy = q; });
     var h = '<div class="sheet-bg" data-act="close"><div class="sheet' + (ui.anim ? " pop" : "") + '" role="dialog" aria-label="Runde ' + N + '">';
     h += '<div class="sh-h"><h2>Runde ' + N + "</h2><span>" + N + (N === 1 ? " Karte" : " Karten") + ' pro Spieler</span><button class="x" data-act="close" aria-label="Schließen">×</button></div>';
     h += '<div class="seg"><button data-act="seg" data-v="bid" class="' + (tab === "bid" ? "on" : "") + '">Ansagen</button><button data-act="seg" data-v="tr" class="' + (tab === "tr" ? "on" : "") + '">Stiche</button></div>';
+    if (tab === "tr") {
+      h += '<div class="bombrow' + (r.bomb ? " on" : "") + '"><div class="bl"><b>💣 Bombe gespielt?</b><small>Die Bombe zerstört den Stich.</small></div><div class="yn" role="group" aria-label="Bombe gespielt"><button data-act="bomb" data-v="0" class="' + (r.bomb ? "" : "on") + '" aria-pressed="' + (r.bomb ? "false" : "true") + '">Nein</button><button data-act="bomb" data-v="1" class="' + (r.bomb ? "on yes" : "") + '" aria-pressed="' + (r.bomb ? "true" : "false") + '">Ja</button></div></div>';
+    }
     g.players.forEach(function (nm, p) {
       var crown = lead.indexOf(p) >= 0 ? ' <span class="crown">👑</span>' : "";
       var b = bidOf(r, p);
@@ -577,27 +608,28 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
       if (tab === "bid") {
         h += "<small>" + (b == null ? "noch keine Ansage" : "zählt: " + b) + "</small></div><div class=\"chips\">";
         for (var k = 0; k <= N; k++) h += '<button class="chip' + (r.base[p] === k ? " on" : "") + '" data-act="bid" data-p="' + p + '" data-v="' + k + '">' + k + "</button>";
-        h += '</div><div class="cloudrow"><span class="lbl">Wolke ändert die Ansage</span>';
+        var locked = cloudBy >= 0 && cloudBy !== p;
+        h += '</div><div class="cloudrow"><span class="lbl">' + (locked ? "Wolke schon gespielt" : "Wolke ändert die Ansage") + "</span>";
         [-1, 1].forEach(function (d) {
-          var can = r.base[p] != null && r.base[p] + (r.cloud[p] === d ? 0 : d) >= 0 && r.base[p] + (r.cloud[p] === d ? 0 : d) <= N;
+          var can = !locked && r.base[p] != null && r.base[p] + (r.cloud[p] === d ? 0 : d) >= 0 && r.base[p] + (r.cloud[p] === d ? 0 : d) <= N;
           h += '<button class="cbtn' + (r.cloud[p] === d ? " on" : "") + '" data-act="cloud" data-p="' + p + '" data-d="' + d + '"' + (can ? "" : " disabled") + ">☁ " + (d > 0 ? "+1" : "-1") + "</button>";
         });
         h += "</div>";
       } else {
         var t = r.tricks[p], pre = (b != null && t != null) ? scoreFor(b, t) : null;
         h += "<small>Ansage " + (b == null ? "fehlt" : b) + (pre == null ? "" : " → " + fmt(pre)) + "</small></div><div class=\"chips\">";
-        for (var k2 = 0; k2 <= N; k2++) h += '<button class="chip' + (t === k2 ? " on" : "") + '" data-act="tr" data-p="' + p + '" data-v="' + k2 + '">' + k2 + "</button>";
+        for (var k2 = 0; k2 <= N; k2++) h += '<button class="chip' + (t === k2 ? " on" : "") + '" data-act="tr" data-p="' + p + '" data-v="' + k2 + '"' + (k2 > N - st.bomb ? " disabled" : "") + ">" + k2 + "</button>";
         h += "</div>";
       }
       h += "</div>";
     });
     h += '<div class="sfoot">';
-    if (st.conflict) h += '<div class="alert" role="alert"><b>Die Ansagen gehen auf.</b> Zusammen sind es ' + st.bidSum + (st.bidSum === 1 ? " Stich" : " Stiche") + " bei " + N + (N === 1 ? " Karte" : " Karten") + ". Das ist nicht erlaubt. Ändere mindestens eine Ansage im Reiter Ansagen.</div>";
+    if (st.conflict) h += '<div class="alert" role="alert"><b>Die Ansagen gehen auf.</b> Zusammen sind es ' + st.bidSum + (st.bidSum === 1 ? " Stich" : " Stiche") + " bei " + N + (N === 1 ? " Karte" : " Karten") + ". Das ist nur erlaubt, wenn jemand die Wolke spielt. Ändere eine Ansage oder wähle die Wolke bei einem Spieler.</div>";
     if (tab === "bid") {
-      if (!st.conflict) h += '<div class="stat">' + (st.bidsMissing ? "Summe bisher" : "Summe der Ansagen") + ": " + st.bidSum + " · Stiche in der Runde: " + N + "</div>";
+      if (!st.conflict) h += '<div class="stat">' + (st.bidsMissing ? "Summe bisher" : "Summe der Ansagen") + ": " + st.bidSum + " · Stiche in der Runde: " + N + (st.cloudOK ? " · Wolke gespielt, es darf aufgehen" : "") + "</div>";
       h += '<button class="btn" data-act="next"' + (st.conflict ? " disabled" : "") + ">Weiter zu den Stichen</button>";
     } else {
-      h += '<div class="stat ' + (st.ok ? "ok" : st.sum > N ? "bad" : "") + '">Stiche verteilt: ' + st.sum + " von " + N + (st.msg && !st.conflict ? " · " + st.msg : "") + '</div><button class="btn" data-act="finish"' + (st.ok ? "" : " disabled") + ">Runde abschließen</button>";
+      h += '<div class="stat ' + (st.ok ? "ok" : st.total > N ? "bad" : "") + '">Stiche verteilt: ' + st.sum + (st.bomb ? " + 1 Bombe" : "") + " von " + N + (st.msg && !st.conflict ? " · " + st.msg : "") + '</div><button class="btn" data-act="finish"' + (st.ok ? "" : " disabled") + ">Runde abschließen</button>";
     }
     h += "</div></div></div>";
     return h;
@@ -617,7 +649,7 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
       h += "</ol>";
       if (open) {
         h += '<div class="scroll-x"><table class="mini"><thead><tr><th>Runde</th>' + rec.players.map(function (n) { return "<th>" + esc(n) + "</th>"; }).join("") + "</tr></thead><tbody>";
-        rec.rounds.forEach(function (r, i) { h += "<tr><td>" + (i + 1) + "</td>" + r.scores.map(function (s) { return '<td class="' + (s < 0 ? "m" : "") + '">' + fmt(s) + "</td>"; }).join("") + "</tr>"; });
+        rec.rounds.forEach(function (r, i) { h += "<tr><td>" + (i + 1) + (r.bomb ? " 💣" : "") + "</td>" + r.scores.map(function (s) { return '<td class="' + (s < 0 ? "m" : "") + '">' + fmt(s) + "</td>"; }).join("") + "</tr>"; });
         h += "</tbody></table></div>";
       }
       h += '<div class="row-btns"><button class="lnk" data-act="exp" data-id="' + rec.id + '">' + (open ? "Rundendetails ausblenden" : "Rundendetails zeigen") + "</button>";
@@ -666,7 +698,7 @@ textarea { min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospa
 
   function settingsView() {
     var h = '<h2 class="page-h">Einstellungen</h2>';
-    h += '<div class="card"><div class="lbl2" style="margin-top:0">Wertung</div><ul class="rules"><li>Richtige Ansage: 20 Punkte plus 10 Punkte pro Stich.</li><li>Falsche Ansage: minus 10 Punkte pro Stich Abweichung.</li><li>Die Ansagen aller Spieler dürfen zusammen nicht genau die Kartenzahl der Runde ergeben.</li><li>Wolke: ändert die Ansage der laufenden Runde um +1 oder -1. Die geänderte Ansage zählt.</li><li>Ansagen und Stiche lassen sich bis zum Rundenabschluss ändern.</li><li>Spiel abbrechen: Der aktuelle Führende gilt als Sieger. Die abgeschlossenen Runden zählen für die Statistik.</li></ul></div>';
+    h += '<div class="card"><div class="lbl2" style="margin-top:0">Wertung</div><ul class="rules"><li>Richtige Ansage: 20 Punkte plus 10 Punkte pro Stich.</li><li>Falsche Ansage: minus 10 Punkte pro Stich Abweichung.</li><li>Die Ansagen aller Spieler dürfen zusammen nicht genau die Kartenzahl der Runde ergeben.</li><li>Wolke (einmal pro Runde): ändert die Ansage um +1 oder -1. Die geänderte Ansage zählt, und dann darf die Summe aufgehen.</li><li>Bombe (einmal pro Runde): zerstört einen Stich und zählt selbst als einer. Es werden also einen Stich weniger verteilt.</li><li>Ansagen und Stiche lassen sich bis zum Rundenabschluss ändern.</li><li>Spiel abbrechen: Der aktuelle Führende gilt als Sieger. Die abgeschlossenen Runden zählen für die Statistik.</li></ul></div>';
     h += '<div class="card"><div class="lbl2" style="margin-top:0">Daten sichern</div><p class="note" style="margin-top:0">Die Daten liegen im Browser dieses Geräts. Kopiere die Sicherung, bevor du Browserdaten löschst oder das Gerät wechselst.</p><textarea id="bk" readonly aria-label="Sicherung">' + esc(backupText()) + '</textarea><div style="margin-top:8px"><button class="btn small" data-act="copy">Sicherung kopieren</button></div>';
     h += '<div class="lbl2">Wiederherstellen</div><textarea id="imp" placeholder="Sicherungstext hier einfügen" aria-label="Sicherung einfügen"></textarea><div style="margin-top:8px"><button class="btn small ghost" data-act="import">Einfügen und zusammenführen</button></div>';
     if (ui.msg) h += '<p class="note">' + esc(ui.msg) + "</p>";
